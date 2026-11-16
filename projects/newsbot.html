@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>News-trading bot · Max Kennedy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case.css">
+<style>
+/* pipeline */
+.pipe{display:flex;flex-wrap:wrap;align-items:center;gap:0;row-gap:12px}
+.node{font:12px var(--mono);color:var(--mute);border:1px solid var(--line2);border-radius:8px;padding:8px 11px;cursor:pointer;transition:.25s;background:var(--bg);white-space:nowrap}
+.node:hover,.node.on{color:#000;background:var(--acc);border-color:var(--acc)}
+.wire{width:22px;height:1px;background:var(--line2);position:relative;overflow:hidden}
+.wire::after{content:"";position:absolute;inset:0;background:var(--acc);transform:translateX(-100%)}
+.wire.on::after{animation:zip .5s ease forwards}
+@keyframes zip{to{transform:translateX(100%)}}
+.detail{margin-top:22px;padding-top:18px;border-top:1px dashed var(--line2);min-height:92px}
+.detail h4{font-weight:500;font-size:16px;margin-bottom:6px}
+.detail p{font-size:15px}
+
+/* saga thread */
+.thread{display:flex;flex-direction:column;gap:12px;position:relative;padding-left:26px}
+.thread::before{content:"";position:absolute;left:8px;top:14px;bottom:14px;width:1px;background:var(--line2)}
+.tp{position:relative;border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--bg)}
+.tp::before{content:"";position:absolute;left:-22px;top:18px;width:9px;height:9px;border-radius:50%;background:var(--bg2);border:1px solid var(--line2)}
+.tp.hit::before{background:var(--short);border-color:var(--short)}
+.tp .src{font:10px var(--mono);color:var(--dim)}
+.tp .hl{font-size:14px;margin:5px 0 9px}
+.tp.dimmed .hl{color:var(--mute)}
+.chip{display:inline-block;font:10.5px var(--mono);padding:3px 8px;border-radius:6px;border:1px solid var(--line2);color:var(--mute)}
+.chip.s{color:var(--short);border-color:#ff6b6b50;background:#ff6b6b10}
+.chip.a{color:var(--amber);border-color:#ffc65c40}
+.thread .tp{opacity:0;transform:translateX(-10px);transition:.6s cubic-bezier(.2,.8,.2,1)}
+.fig.in .thread .tp{opacity:1;transform:none}
+.fig.in .thread .tp:nth-child(2){transition-delay:.35s}.fig.in .thread .tp:nth-child(3){transition-delay:.7s}
+
+</style>
+</head>
+<body>
+<div id="progress"></div>
+<nav>
+  <a class="back" href="../index.html#work"><i>←</i> Back</a>
+  <a class="logo" href="../index.html">mk<span>.</span>dev</a>
+</nav>
+
+<header class="head">
+  <div class="eyebrow"><span class="dot"></span>01 · In development · trade log updated as it runs</div>
+  <h1>News-trading <em>bot</em></h1>
+  <p class="lede">Reads crypto and market news from Telegram, decides <b>within about a second</b> whether a post is a genuine surprise, and trades it on Hyperliquid <b>before the market has priced it in</b>. Almost every post is skipped. That's the point.</p>
+  <div class="facts">
+    <div>Role<b>Solo build</b></div>
+    <div>Stack<b>Python · Telethon · SQLite</b></div>
+    <div>Model<b>Claude Haiku (streaming JSON)</b></div>
+    <div>Venue<b>Hyperliquid perps + spot</b></div>
+  </div>
+  <div class="numbers reveal">
+    <div class="num"><b id="nStart"></b><span>starting balance</span></div>
+    <div class="num g"><b id="nBal"></b><span>balance now</span></div>
+    <div class="num"><b id="nTrades"></b><span>trades taken</span></div>
+    <div class="num"><b id="nWin"></b><span>closed green</span></div>
+  </div>
+</header>
+
+<div class="body">
+  <aside class="toc">
+    <a href="#idea">The idea</a>
+    <a href="#pipeline">Pipeline</a>
+    <a href="#sagas">Saga memory</a>
+    <a href="#entry">Entry maths</a>
+    <a href="#risk">Risk</a>
+    <a href="#results">Trades</a>
+    <a href="#safety">Safety</a>
+    <a href="#next">What's next</a>
+  </aside>
+
+  <main>
+    <section id="idea">
+      <div class="k">01</div>
+      <h2>Trade the surprise, <em>skip the rest</em></h2>
+      <p>Most market news is either noise or already expected: CPI prints, Fed meetings, earnings. By the time it lands, the move has happened. The edge is in the <b>rare, unscheduled shocks</b>: an exchange hack, a protocol exploit, enforcement against a named token, a first-ever treasury sale.</p>
+      <p>So the bot is built to say no. It reads every post from four news channels, and the expectation is <b>a handful of trades a month</b>. Every decision, including every skip, is logged with its reason.</p>
+    </section>
+
+    <section id="pipeline">
+      <div class="k">02</div>
+      <h2>From post to position <em>in seconds</em></h2>
+      <p>The model call and the market data fetch run in parallel, so by the time Haiku has answered, the price context is already there. Hover or tap each stage.</p>
+      <div class="fig reveal">
+        <div class="pipe" id="pipe"></div>
+        <div class="detail" id="detail"></div>
+      </div>
+    </section>
+
+    <section id="sagas">
+      <div class="k">03</div>
+      <h2>Saga <em>memory</em></h2>
+      <p>News arrives in pieces. The first headline moves the market; the confirmation ten minutes later doesn't. Without memory, a bot would trade the same story three times.</p>
+      <p>Every post is assigned to a <b>saga</b>, a running story with its own summary and the moves it has already caused. The model is told what each saga has already done, and code enforces <b>one trade per saga</b>. If a story is denied or resolved, any open position on it is closed.</p>
+      <div class="fig reveal">
+        <div class="thread">
+          <div class="tp hit"><div class="src">20:33:13 · first sighting</div><div class="hl">BREAKING: major exchange hacked, hot wallets being drained</div><span class="chip s">TRADE · SHORT BTC</span></div>
+          <div class="tp dimmed"><div class="src">+9 min · same saga</div><div class="hl">Exchange confirms the size of the exploit</div><span class="chip a">SKIP · story not changing</span></div>
+          <div class="tp dimmed"><div class="src">+22 min · same saga</div><div class="hl">Exchange says user funds are covered</div><span class="chip a">SKIP · saga already traded</span></div>
+        </div>
+        <div class="fig-cap"><span>Follow-up posts are illustrative</span></div>
+      </div>
+    </section>
+
+    <section id="entry">
+      <div class="k">04</div>
+      <h2>Only enter if it's <em>still worth it</em></h2>
+      <p>The model estimates how far the price should move. Code then works out the worst price it can still enter at and keep a minimum reward-to-risk. If the market has already gone past that price, the trade is skipped as priced in.</p>
+      <div class="fig reveal">
+        <div class="formula">E<sub>max</sub> = (T + R<sub>min</sub>·S) / (1 + R<sub>min</sub>)</div>
+        <div class="legend">
+          <div><b>S</b> · last 1-minute close before the post arrived (the pre-news price)</div>
+          <div><b>T</b> · target: S moved by the model's expected %</div>
+          <div><b>R<sub>min</sub></b> · minimum reward-to-risk to accept</div>
+          <div><b>E<sub>max</sub></b> · the order is an immediate-or-cancel limit at this price</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="risk">
+      <div class="k">05</div>
+      <h2>The stop sits at the <em>pre-news price</em></h2>
+      <p>If the news was real, price shouldn't go back to where it was before the post. If it does, the thesis is wrong. So the stop goes at <b>S</b>, widened only if that's inside normal 1-minute noise.</p>
+      <p>Size comes from the stop: risk a fixed amount, divide by the stop distance. Once the trade is up by the amount risked, the stop moves to breakeven; once it is up twice that, the stop starts trailing.</p>
+    </section>
+
+    <section id="results">
+      <div class="k">06</div>
+      <h2>The trades, <em>so far</em></h2>
+      <p>Every trade the bot has taken, starting from a <b>$1,000</b> balance. Losing trades stop at a fixed loss; the winners are left to run. This log is updated as new trades happen.</p>
+      <div class="fig reveal" id="eqFig">
+        <svg id="equity" style="width:100%;height:200px;display:block;overflow:visible"></svg>
+        <div class="fig-cap"><span>Account balance after each trade</span><span id="eqUpd"></span></div>
+      </div>
+      <div class="reveal">
+        <table>
+          <thead><tr><th>Date</th><th>Asset</th><th>Side</th><th>Exit</th><th>P&amp;L</th><th>Balance</th></tr></thead>
+          <tbody id="tradeRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="safety">
+      <div class="k">07</div>
+      <h2>Hard to <em>blow up</em></h2>
+      <p>The model proposes; code decides. Scheduled macro releases, blackout windows around them, already-traded sagas, daily loss limits and cooldowns are all <b>hard vetoes in code</b>. Invalid JSON, a refusal or a timeout means no trade.</p>
+      <div class="reveal">
+        <table>
+          <thead><tr><th>Mode</th><th>What happens</th></tr></thead>
+          <tbody>
+            <tr><td>log_only</td><td>Live mainnet data, fills simulated against the live order book, no orders. The default.</td></tr>
+            <tr><td>testnet</td><td>Real orders on Hyperliquid testnet.</td></tr>
+            <tr><td>live</td><td>Real orders. Refuses to start without an explicit confirmation phrase in the config.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:22px">It trades through an API wallet that can't withdraw, and refuses to start if given the main wallet's key. A <code>KILL</code> file or a <code>/halt</code> message stops new entries instantly. 79 automated tests cover each stage, from ingest to execution.</p>
+    </section>
+
+    <section id="next">
+      <div class="k">08</div>
+      <h2>What's <em>next</em></h2>
+      <p>Keep it running and keep this log up to date. Three of the first eight trades hit their full stop, so the next thing I'm studying is whether those three share a pattern the vetoes could catch, without overfitting to a few weeks of data.</p>
+    </section>
+  </main>
+</div>
+
+<a class="next" href="agentcaptcha.html">
+  <div class="next-in"><div><small>Next project</small><h3>AgentCAPTCHA</h3></div><span class="arrow">→</span></div>
+</a>
+<footer><span>© 2026 Max Kennedy</span><a href="../index.html">mk.dev</a></footer>
+
+<script src="trades.js"></script>
+<script>
+/* trade log: stats, equity curve and table all come from trades.js */
+(()=>{
+  const {start,trades}=window.TRADES, money=v=>'$'+Math.round(v).toLocaleString('en-US');
+  let bal=start; const curve=[start];
+  const rows=trades.map(t=>{bal+=t.pnl;curve.push(bal);return {...t,bal};});
+  const wins=trades.filter(t=>t.pnl>0).length;
+  const set=(id,v,pre='',suf='')=>{const el=document.getElementById(id);el.textContent=pre+v+suf;el.dataset.count=v;el.dataset.pre=pre;el.dataset.suf=suf;};
+  set('nStart',start,'$'); set('nBal',Math.round(bal),'$'); set('nTrades',trades.length); set('nWin',wins,'',' / '+trades.length);
+  document.getElementById('tradeRows').innerHTML=rows.slice().reverse().map(t=>`<tr><td>${t.date}</td><td>${t.asset}</td><td>${t.side[0].toUpperCase()+t.side.slice(1)}</td><td>${t.exit}</td><td class="${t.pnl>=0?'g':'r'}">${t.pnl>=0?'+':'−'}${money(Math.abs(t.pnl))}</td><td>${money(t.bal)}</td></tr>`).join('');
+  document.getElementById('eqUpd').textContent='last trade '+trades.at(-1).date;
+  const svg=document.getElementById('equity');
+  function draw(animate){
+    const W=svg.clientWidth,H=svg.clientHeight,P=10,R=64; if(!W) return;
+    const lo=Math.min(...curve)*.97, hi=Math.max(...curve)*1.02;
+    const X=i=>P+i/(curve.length-1)*(W-P-R), Y=v=>P+(hi-v)/(hi-lo)*(H-2*P);
+    const d=curve.map((v,i)=>(i?'L':'M')+X(i).toFixed(1)+','+Y(v).toFixed(1)).join(' ');
+    svg.innerHTML=`<line x1="${P}" x2="${W-R}" y1="${Y(start)}" y2="${Y(start)}" stroke="#8b8b94" stroke-opacity=".35" stroke-dasharray="2 4"/>
+      <text x="${W-R+8}" y="${Y(start)+3}" fill="#55555d" font-size="10" font-family="Geist Mono">${money(start)}</text>
+      <path id="eqLn" d="${d}" fill="none" stroke="#5ef0a0" stroke-width="1.6" stroke-linejoin="round"/>
+      ${curve.map((v,i)=>i?`<circle cx="${X(i)}" cy="${Y(v)}" r="2.5" fill="#111114" stroke="${rows[i-1].pnl>=0?'#5ef0a0':'#ff6b6b'}" stroke-width="1.3"/>`:'').join('')}
+      <text x="${W-R+8}" y="${Y(bal)+3}" fill="#ededef" font-size="10" font-family="Geist Mono">${money(bal)}</text>`;
+    if(animate){const ln=document.getElementById('eqLn'),L=ln.getTotalLength();ln.style.strokeDasharray=L;
+      ln.animate([{strokeDashoffset:L},{strokeDashoffset:0}],{duration:1400,easing:'cubic-bezier(.6,0,.2,1)',fill:'forwards'});}
+  }
+  draw(false); document.getElementById('eqFig').addEventListener('reveal',()=>draw(true)); addEventListener('resize',()=>draw(false));
+})();
+</script>
+<script src="case.js"></script>
+<script>
+/* pipeline explorer */
+(()=>{
+  const stages=[
+    ['ingest','Telegram ingest','Posts arrive through the bot\'s own Telegram session. Each gets a millisecond timestamp and is de-duplicated across channels.'],
+    ['haiku','Classify with Haiku','One streaming call per new post returns strict JSON: trade candidates, which saga it belongs to, category, and whether the event was expected.'],
+    ['prefetch','Market prefetch','In parallel: pre-news price S, 1-minute volatility, order book depth and prices for every tradable asset.'],
+    ['vetoes','Hard vetoes','Code rejects macro categories, scheduled releases, already-traded sagas, loss limits and cooldowns, regardless of what the model said.'],
+    ['select','Pick instrument','Each candidate is ranked by reward-to-risk after slippage from walking the real order book. Already-priced-in moves are dropped.'],
+    ['enter','Enter + stop','Immediate-or-cancel limit at E_max, then a reduce-only stop at once. If the stop can\'t be placed, the position is closed.'],
+    ['manage','Manage','Stop to breakeven once up by the amount risked, then trail. Exit early on saga denial, before scheduled releases, or on the kill switch.'],
+  ];
+  const pipe=$('#pipe'), det=$('#detail'); let cur=0, auto=true;
+  stages.forEach((s,i)=>{
+    if(i){const w=document.createElement('div');w.className='wire';pipe.append(w);}
+    const n=document.createElement('div');n.className='node';n.textContent=s[0];
+    n.addEventListener('mouseenter',()=>{auto=false;show(i);});
+    n.addEventListener('click',()=>{auto=false;show(i);});
+    pipe.append(n);
+  });
+  const nodes=$$('#pipe .node'), wires=$$('#pipe .wire');
+  function show(i){
+    cur=i; nodes.forEach((n,k)=>n.classList.toggle('on',k===i));
+    if(i>0){const w=wires[i-1];w.classList.remove('on');void w.offsetWidth;w.classList.add('on');}
+    det.innerHTML=`<h4>${stages[i][1]}</h4><p>${stages[i][2]}</p>`;
+  }
+  show(0);
+  setInterval(()=>{if(auto) show((cur+1)%stages.length);},2200);
+  $('#pipe').addEventListener('mouseleave',()=>{auto=true;});
+})();
+
+</script>
+</body>
+</html>
